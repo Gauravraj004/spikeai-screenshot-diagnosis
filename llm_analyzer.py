@@ -6,7 +6,8 @@ Uses free Groq API for intelligent semantic understanding
 import os
 import json
 import base64
-from typing import Dict, Any
+import time
+from typing import Dict, Any, Callable
 from pathlib import Path
 from dotenv import load_dotenv
 from bs4 import BeautifulSoup
@@ -14,6 +15,31 @@ import requests
 
 # Load environment
 load_dotenv()
+
+
+def retry_on_failure(max_retries: int = 3, backoff_factor: float = 2.0):
+    """
+    Decorator for retry logic with exponential backoff
+    Use for LLM API calls that may fail due to rate limits or timeouts
+    """
+    def decorator(func: Callable) -> Callable:
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        wait_time = backoff_factor ** attempt
+                        print(f"  ⚠ API call failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time:.1f}s...")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"  ✗ API call failed after {max_retries} attempts")
+            # If all retries failed, return error dict instead of raising
+            return {"error": f"Failed after {max_retries} retries: {str(last_exception)}", "issue_detected": False}
+        return wrapper
+    return decorator
 
 
 def extract_html_summary(html_content: str, max_length: int = 3000) -> str:
@@ -61,13 +87,18 @@ def extract_html_summary(html_content: str, max_length: int = 3000) -> str:
     return summary
 
 
-def call_groq_llm(prompt: str, model: str = "llama-3.3-70b-versatile") -> str:
+@retry_on_failure(max_retries=3, backoff_factor=2.0)
+def call_groq_llm(prompt: str, model: str = "llama-3.3-70b-versatile") -> Dict[str, Any]:
     """
     Call Groq LLM API (free tier) - using llama-3.3-70b-versatile
+    With retry logic and exponential backoff for rate limits
+    
+    Returns:
+        Dict with 'content' (str) and 'token_usage' (dict)
     """
     api_key = os.getenv('GROQ_API_KEY')
     if not api_key:
-        return "Error: No GROQ_API_KEY configured"
+        raise Exception("Error: No GROQ_API_KEY configured in .env file")
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -85,22 +116,36 @@ def call_groq_llm(prompt: str, model: str = "llama-3.3-70b-versatile") -> str:
     }
     
     try:
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=45)
         response.raise_for_status()
         result = response.json()
-        return result['choices'][0]['message']['content']
+        
+        # Extract token usage
+        usage = result.get('usage', {})
+        token_data = {
+            'prompt_tokens': usage.get('prompt_tokens', 0),
+            'completion_tokens': usage.get('completion_tokens', 0),
+            'total_tokens': usage.get('total_tokens', 0)
+        }
+        
+        return {
+            'content': result['choices'][0]['message']['content'],
+            'token_usage': token_data
+        }
     except requests.exceptions.HTTPError as e:
         # Get error details from response
         try:
             error_details = e.response.json()
-            return f"API Error: {error_details.get('error', {}).get('message', str(e))}"
+            error_msg = error_details.get('error', {}).get('message', str(e))
+            # Re-raise for retry logic to handle
+            raise Exception(f"API Error: {error_msg}")
         except:
-            return f"API Error: {str(e)}"
+            raise Exception(f"API Error: {str(e)}")
     except Exception as e:
-        return f"Error: {str(e)}"
+        raise  # Re-raise for retry decorator
 
 
-def analyze_html_with_llm(html_content: str, page_url: str, cv_finding: str = None) -> Dict[str, Any]:
+def analyze_html_with_llm(html_content: str, page_url: str, cv_finding: str = None, ocr_result: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     UNIVERSAL LLM-based HTML analysis - works for ANY website
     Analyzes HTML semantically to find issues like:
@@ -115,6 +160,7 @@ def analyze_html_with_llm(html_content: str, page_url: str, cv_finding: str = No
         html_content: Full HTML source
         page_url: URL of the page
         cv_finding: Optional CV detection result (e.g., "low entropy", "duplicate content")
+        ocr_result: Optional OCR mismatch detection result
     """
     
     soup = BeautifulSoup(html_content, 'lxml')
@@ -149,13 +195,28 @@ def analyze_html_with_llm(html_content: str, page_url: str, cv_finding: str = No
         if href:
             css_links.append(href)
     
+    # Build OCR context if available
+    ocr_context = ""
+    if ocr_result and ocr_result.get('has_mismatch'):
+        ocr_context = f"""
+⚠️ OCR MISMATCH DETECTED (HIGH PRIORITY):
+The following text is VISIBLE in the screenshot but NOT FOUND in the HTML:
+{json.dumps(ocr_result.get('visible_error_text', []), indent=2)}
+
+This indicates dynamically rendered error/overlay content (JavaScript, iframe, or security challenge).
+Issue Type: {ocr_result.get('issue_type', 'unknown')}
+Confidence: {ocr_result.get('confidence', 0.0):.2f}
+"""
+    elif ocr_result and not ocr_result.get('has_mismatch'):
+        ocr_context = "\n✓ OCR Check: All visible text matches HTML content (no dynamic errors detected)\n"
+    
     # Build context for LLM
     context = f"""Webpage Diagnosis - Universal Analysis
 
 URL: {page_url}
 
 CV FINDING: {cv_finding if cv_finding else "No CV issues detected - page loaded successfully"}
-
+{ocr_context}
 HTML Summary:
 - Visible text preview: "{visible_text_preview[:300]}..."
 - External scripts: {len(scripts)} total
@@ -179,25 +240,47 @@ CV Finding Analysis:
 - If "cookie modal detected": Check if cookie scripts are actually BLOCKING or just present
 - If "no CV issues": Check HTML for potential hidden issues (missing resources, JS errors)
 
-DETECTION RULES:
-1. DUPLICATE CONTENT: Only if CV found "repeated/duplicate" AND HTML has legitimate duplication (not stitching bug)
-2. SECURITY CHALLENGE: Visible text contains "verify", "challenge", "cloudflare", "captcha", "bot detection"
-3. AUTH WALL: Visible text contains "login", "sign in", "authentication required", "restricted"
-4. MISSING RESOURCES: CV found "blank" AND CSS links are broken or missing
+DETECTION RULES (priority order):
+
+**HIGHEST PRIORITY - OCR MISMATCH:**
+If OCR detected error text visible but not in HTML, this is DEFINITIVE PROOF of a blocking issue.
+The error was dynamically rendered (JavaScript, iframe, security overlay).
+
+1. SECURITY/ERROR PAGE (HIGH PRIORITY): 
+   - OCR found: "verify", "security", "connection", "couldn't verify", "access denied", "captcha", "challenge"
+   - These are ERROR PAGES blocking the actual website
+   - Issue type: "security_block" or "security_challenge"
+   
+2. DUPLICATE CONTENT: Only if CV found "repeated/duplicate" AND HTML has legitimate duplication (not stitching bug)
+
+3. AUTH WALL: OCR or HTML contains "login", "sign in", "authentication required", "restricted" as MAIN content
+
+4. MISSING RESOURCES: CV found "blank" AND CSS links are broken/missing AND visible text is minimal
+
 5. COOKIE MODAL BLOCKING: CV explicitly detected "cookie modal blocking" AND cookiehub/onetrust scripts present
+
+CRITICAL: If OCR mismatch exists, prioritize it over other findings!
 
 DO NOT report cookie scripts as blocking UNLESS CV detected a modal blocking content!
 
 RESPOND WITH JSON ONLY (no markdown):
-{{"issue_detected":true,"issue_type":"security_challenge","confidence":0.9,"diagnosis":"Cloudflare security challenge blocking page load","evidence":"challenge text in visible content","tool_fix":"TOOL: Add captcha/security solver or whitelist IP"}}
+{{"issue_detected":true,"issue_type":"security_block","confidence":0.95,"diagnosis":"Security verification page blocking access to actual content","evidence":"visible text: 'We couldn't verify the security of your connection'","tool_fix":"TOOL: Add security bypass, use different IP/browser fingerprint"}}
 
 If no blocking issue found:
 {{"issue_detected":false,"diagnosis":"Page structure appears normal","confidence":0.95,"tool_fix":"No action needed"}}"""
 
-    response = call_groq_llm(context)
+    llm_response = call_groq_llm(context)
     
-    # Check for API errors
-    if response.startswith("Error:") or response.startswith("API Error:"):
+    # Check if retry decorator returned error dict
+    if isinstance(llm_response, dict) and 'error' in llm_response:
+        return llm_response  # Already has error and issue_detected: False
+    
+    # Extract content and token usage
+    response = llm_response.get('content', '') if isinstance(llm_response, dict) else llm_response
+    token_usage = llm_response.get('token_usage', {}) if isinstance(llm_response, dict) else {}
+    
+    # Check for API errors in string response
+    if isinstance(response, str) and (response.startswith("Error:") or response.startswith("API Error:")):
         return {"error": response, "issue_detected": False}
     
     try:
@@ -214,14 +297,15 @@ If no blocking issue found:
             json_str = response[json_start:json_end]
             parsed = json.loads(json_str)
             
-            # Universal response format
+            # Universal response format with token tracking
             return {
                 "issue_detected": parsed.get("issue_detected", False),
                 "issue_type": parsed.get("issue_type", "unknown"),
                 "confidence": parsed.get("confidence", 0.5),
                 "diagnosis": parsed.get("diagnosis", "No issues detected"),
                 "evidence": parsed.get("evidence", ""),
-                "tool_fix": parsed.get("tool_fix", "No action needed")
+                "tool_fix": parsed.get("tool_fix", "No action needed"),
+                "token_usage": token_usage
             }
         else:
             # If CV didn't find issues and LLM can't parse, assume page is correct
@@ -231,7 +315,8 @@ If no blocking issue found:
                     "diagnosis": "Page structure appears normal",
                     "confidence": 0.85,
                     "evidence": "",
-                    "tool_fix": "No action needed"
+                    "tool_fix": "No action needed",
+                    "token_usage": token_usage
                 }
             return {"error": f"No JSON found in LLM response. Raw response: {response[:200]}", "issue_detected": False}
     except json.JSONDecodeError as e:
@@ -242,7 +327,8 @@ If no blocking issue found:
                 "diagnosis": "Page structure appears normal",
                 "confidence": 0.85,
                 "evidence": "",
-                "tool_fix": "No action needed"
+                "tool_fix": "No action needed",
+                "token_usage": token_usage
             }
         return {"error": f"Failed to parse JSON: {str(e)}. Response: {response[:200]}", "issue_detected": False}
     except Exception as e:
@@ -364,7 +450,7 @@ Respond ONLY with valid JSON (no markdown):
         return {"status": "ERROR", "diagnosis": f"VLM error: {str(e)}"}
 
 
-def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_finding: str = None) -> Dict[str, Any]:
+def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_finding: str = None, ocr_result: Dict[str, Any] = None) -> Dict[str, Any]:
     """
     UNIVERSAL LLM-based diagnosis - works for ANY website
     
@@ -376,9 +462,15 @@ def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_fi
         screenshot_path: Path to screenshot
         page_url: URL of the page
         cv_finding: Optional CV detection result (e.g., "low entropy", "duplicate content")
+        ocr_result: Optional OCR analysis result with visible error text
     
     Returns:
-        Universal diagnosis result
+        Dict[str, Any]: Universal diagnosis result with keys:
+            - status (str): 'CORRECT', 'BROKEN', or 'ERROR'
+            - diagnosis (str): Detailed issue description
+            - confidence (float): Detection confidence 0.0-1.0
+            - suggested_fix (str): Recommended action to resolve issue
+            - evidence (str): Supporting evidence for diagnosis
     """
     
     # Read HTML
@@ -393,9 +485,16 @@ def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_fi
     with open(html_path, 'r', encoding='utf-8') as f:
         html_content = f.read()
     
-    # Use LLM to analyze HTML semantically
+    # Use LLM to analyze HTML semantically (with ENHANCED OCR context)
     print("  → LLM: Semantic HTML analysis for blocking issues...")
-    html_analysis = analyze_html_with_llm(html_content, page_url, cv_finding)
+    
+    # Enhance CV finding with OCR results for better LLM context
+    enhanced_cv_finding = cv_finding or ""
+    if ocr_result and ocr_result.get('has_mismatch'):
+        ocr_context = f" | OCR CRITICAL: Detected visible error text not in HTML: {', '.join(ocr_result.get('visible_error_text', [])[:3])}"
+        enhanced_cv_finding = (enhanced_cv_finding + ocr_context).strip()
+    
+    html_analysis = analyze_html_with_llm(html_content, page_url, enhanced_cv_finding, ocr_result)
     
     if "error" in html_analysis:
         # If no API key configured and CV passed, assume page is correct
@@ -429,7 +528,8 @@ def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_fi
             "confidence": html_analysis.get("confidence", 0.8),
             "suggested_fix": tool_fix,
             "issue_type": issue_type,
-            "evidence": html_analysis.get("evidence", "")
+            "evidence": html_analysis.get("evidence", ""),
+            "token_usage": html_analysis.get("token_usage", {})
         }
     
     # No issue detected - page appears correct
@@ -438,7 +538,8 @@ def diagnose_with_llm(html_path: str, screenshot_path: str, page_url: str, cv_fi
         "status": "CORRECT",
         "diagnosis": html_analysis.get("diagnosis", "Page structure appears normal"),
         "confidence": html_analysis.get("confidence", 0.90),
-        "suggested_fix": "No action needed"
+        "suggested_fix": "No action needed",
+        "token_usage": html_analysis.get("token_usage", {})
     }
 
 

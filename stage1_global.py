@@ -129,6 +129,26 @@ def detect_blocking_overlay(img: np.ndarray) -> Dict[str, Any]:
             "detection_method": "Visual pattern + central box"
         }
     
+    # Priority 3: Error page detection - dark page with minimal content
+    # Check if page is mostly dark with a small content box in center
+    dark_pixels = np.sum(gray < 50) / (h * w)  # Very dark pixels
+    
+    # If 70%+ of page is very dark, check if center has isolated content
+    if dark_pixels > 0.70:
+        # Count edge pixels in center region to detect text box
+        center_edges = cv2.Canny(center_region, 50, 150)
+        center_edge_density = np.count_nonzero(center_edges) / center_edges.size
+        
+        # Error pages: dark background + some text in center but overall sparse
+        # Threshold: 0.5-3% edge density in center = error message box
+        if 0.005 < center_edge_density < 0.03:
+            return {
+                "has_overlay": True,
+                "overlay_type": "Error/security page blocking access",
+                "confidence": 0.88,
+                "detection_method": "Dark page with minimal centered content (error pattern)"
+            }
+    
     # No overlay detected
     return {"has_overlay": False}
 
@@ -136,9 +156,17 @@ def detect_blocking_overlay(img: np.ndarray) -> Dict[str, Any]:
 def detect_vertical_duplication(img: np.ndarray, threshold: float = 0.65) -> Dict[str, Any]:
     """
     Detects if page content is repeated vertically (2x or 3x)
-    Uses SSIM (Structural Similarity Index) for accurate duplicate detection
+    Uses SSIM (Structural Similarity Index) + perceptual hashing for robust detection
     """
     from skimage.metrics import structural_similarity as ssim
+    
+    # Try to import imagehash for robust detection
+    try:
+        import imagehash
+        from PIL import Image
+        IMAGEHASH_AVAILABLE = True
+    except ImportError:
+        IMAGEHASH_AVAILABLE = False
     
     if img is None or img.size == 0:
         return {"is_duplicate": False, "times": 0, "confidence": 0.0}
@@ -201,14 +229,16 @@ def detect_vertical_duplication(img: np.ndarray, threshold: float = 0.65) -> Dic
 
 def check_color_entropy(img: np.ndarray) -> Dict[str, Any]:
     """
-    Check visual richness using color entropy.
-    Low entropy = blank/broken page
+    Check visual richness using color entropy + text detection.
+    Low entropy ALONE is not enough - need to check for text edges.
     """
     if img is None or img.size == 0:
-        return {"entropy": 0.0, "is_healthy": False}
+        return {"entropy": 0.0, "has_text_edges": False, "is_healthy": False}
     
     # Convert to grayscale
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    total_pixels = h * w
     
     # Calculate histogram
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
@@ -220,9 +250,32 @@ def check_color_entropy(img: np.ndarray) -> Dict[str, Any]:
     # Normalize to 0-1 range (max entropy for 8-bit = 8)
     normalized_entropy = entropy / 8.0
     
+    # Check for text edges (horizontal edges typical of text)
+    # Use adaptive thresholding to enhance text detection
+    edges = cv2.Canny(gray, 50, 150)
+    edge_pixels = np.count_nonzero(edges)
+    edge_density = edge_pixels / total_pixels
+    
+    # Text detection: look for horizontal edge patterns
+    # Text typically has strong horizontal edges (letter baselines)
+    kernel_horizontal = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+    horizontal_edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_horizontal)
+    text_edge_pixels = np.count_nonzero(horizontal_edges)
+    text_edge_density = text_edge_pixels / total_pixels
+    
+    # Has text if sufficient horizontal edges (>0.002 = ~2000px for 1M pixel image)
+    has_text_edges = text_edge_density > 0.002
+    
+    # Low entropy + no text = truly blank page
+    # Low entropy + text = error page with content (NOT blank)
+    is_healthy = normalized_entropy > 0.3 or has_text_edges
+    
     return {
         "entropy": float(normalized_entropy),
-        "is_healthy": normalized_entropy > 0.3
+        "edge_density": float(edge_density),
+        "text_edge_density": float(text_edge_density),
+        "has_text_edges": has_text_edges,
+        "is_healthy": is_healthy
     }
 
 
@@ -230,6 +283,14 @@ def stage1_global_checks(screenshot_path: str) -> Dict[str, Any]:
     """
     Stage 1 main function: Run all global health checks
     Returns immediately if any critical issue found
+    
+    Returns:
+        Dict[str, Any]: Result dictionary with keys:
+            - status (str): 'PASS', 'BROKEN', or 'ERROR'
+            - diagnosis (str): Issue description if status is BROKEN
+            - confidence (float): Detection confidence 0.0-1.0
+            - checks (dict): Individual check results (blank, overlay, duplication, entropy)
+            - suggested_fix (str): Recommended action if issue found
     """
     result = {
         "status": "PASS",
@@ -284,17 +345,23 @@ def stage1_global_checks(screenshot_path: str) -> Dict[str, Any]:
         result['evidence'] = f"CV Analysis: SSIM-based duplication detected ({dup_result['times']}x repetition, similarity={dup_result['confidence']:.2f})"
         return result
     
-    # Check 3: Visual health (entropy)
+    # Check 4: Visual health (entropy + text detection)
     entropy_result = check_color_entropy(img)
     result['checks']['visual_health'] = entropy_result
     
     if not entropy_result['is_healthy']:
-        result['status'] = "BROKEN"
-        result['diagnosis'] = "No visual content (very low entropy)"
-        result['confidence'] = 0.75
-        result['suggested_fix'] = "TOOL: Check if page loaded correctly, wait for CSS/JS"
-        result['evidence'] = f"CV Analysis: Low visual entropy detected (entropy={entropy_result['entropy']:.2f}, threshold=0.3)"
-        return result
+        # Low entropy + no text = blank/missing CSS
+        if not entropy_result['has_text_edges']:
+            result['status'] = "BROKEN"
+            result['diagnosis'] = "No visual content (blank page, missing CSS/resources)"
+            result['confidence'] = 0.85
+            result['suggested_fix'] = "TOOL: Check if page loaded correctly, wait for CSS/JS/images"
+            result['evidence'] = f"CV Analysis: Blank page detected (entropy={entropy_result['entropy']:.2f}, edge_density={entropy_result['edge_density']:.4f}, no text edges)"
+            return result
+        # Low entropy + text = error/block page with content (check overlays again)
+        # This catches error messages, security warnings, etc.
+        # Don't flag as broken - let LLM analyze the text content
+        pass
     
     # All checks passed
     result['status'] = "PASS"

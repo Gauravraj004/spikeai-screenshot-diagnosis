@@ -1,31 +1,12 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
-*$py.class
+*.class
 *.so
 .Python
-env/
 venv/
+env/
 ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Environment variables
-.env
-.venv
 
 # IDE
 .vscode/
@@ -34,25 +15,20 @@ wheels/
 *.swo
 *~
 
+# Environment
+.env
+
+# Generated Reports
+diagnosis_report.xlsx
+diagnosis_report.csv
+*.xlsx
+*.csv
+
+# Test Results
+results/*.json
+results/debug/*.png
+.pytest_cache/
+
 # OS
 .DS_Store
 Thumbs.db
-
-# Project specific
-# /data/html/*.html
-# /data/screenshots/*.png
-# /data/screenshots/*.jpg
-# /data/screenshots/*.jpeg
-/results/*.json
-summary.csv
-
-# Output Reports
-diagnosis_report.xlsx
-diagnosis_report.csv
-
-# Keep example files
-!results/example*.json
-!results/README.txt
-
-# Keep directory structure but not contents
-!.gitkeep
