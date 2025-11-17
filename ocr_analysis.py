@@ -14,82 +14,51 @@ from difflib import SequenceMatcher
 import re
 import gc
 
-# Try to import OCR libraries (with fallback strategy)
-OCR_ENGINE = None  # Will be 'easyocr', 'paddleocr', or None
+# EasyOCR - The ONLY OCR engine (PaddleOCR removed due to network issues)
+OCR_ENGINE = None
 _ocr_reader = None
-_ocr_reader_initialized = False  # Track initialization status
+_ocr_reader_initialized = False
 _ocr_import_error = None
 
-# Try EasyOCR first (better accuracy, no network downloads)
 try:
     import easyocr
     OCR_ENGINE = 'easyocr'
-    print("  ℹ Using EasyOCR (no network downloads required)")
+    print("  ℹ Using EasyOCR for text extraction")
 except Exception as e:
     _ocr_import_error = str(e)
-    # Try PaddleOCR as fallback
-    try:
-        from paddleocr import PaddleOCR
-        OCR_ENGINE = 'paddleocr'
-        print("  ℹ Using PaddleOCR (network may be required for first-time model download)")
-    except Exception as e2:
-        print("⚠ Warning: No OCR engine available")
-        print(f"  EasyOCR: {e}")
-        print(f"  PaddleOCR: {e2}")
-        print("  Install with: pip install easyocr")
+    print("⚠ Warning: EasyOCR not available")
+    print(f"  Error: {e}")
+    print("  Install with: pip install easyocr torch torchvision")
 
 @functools.lru_cache(maxsize=1)
 def get_ocr_reader_cached():
-    """Get or initialize OCR reader with LRU cache (singleton pattern)"""
-    if not OCR_ENGINE:
+    """
+    Get or initialize EasyOCR reader with LRU cache (singleton pattern)
+    Models (~80MB) downloaded automatically on first run and cached locally
+    """
+    if not OCR_ENGINE or OCR_ENGINE != 'easyocr':
         return None
         
     try:
-        if OCR_ENGINE == 'easyocr':
-            print("  → Initializing EasyOCR (first run only)...")
-            import easyocr
-            # EasyOCR will download models on first use (~80MB one-time download)
-            # Models are cached locally for subsequent runs
-            reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-            print("  ✓ EasyOCR cached for subsequent calls")
-            return reader
-        elif OCR_ENGINE == 'paddleocr':
-            print("  → Initializing PaddleOCR (first run only)...")
-            from paddleocr import PaddleOCR
-            import os
-            # PaddleOCR init - use cached models, skip re-download
-            try:
-                # Set shorter timeout for network operations
-                os.environ['PADDLEOCR_DOWNLOAD_TIMEOUT'] = '10'
-                
-                # Initialize with cached models only (no download)
-                reader = PaddleOCR(
-                    use_angle_cls=True, 
-                    lang='en',
-                    use_gpu=False,
-                    show_log=False  # Suppress download logs
-                )
-                print("  ✓ PaddleOCR cached for subsequent calls")
-                return reader
-            except Exception as e:
-                error_msg = str(e)
-                # If it's just a network timeout, models may still be cached
-                if 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
-                    print(f"  ⚠ Network timeout during init, but models may be cached")
-                    # Try to create reader anyway - cached models should work
-                    try:
-                        reader = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False)
-                        print("  ✓ Using cached PaddleOCR models")
-                        return reader
-                    except:
-                        pass
-                print(f"  ⚠ PaddleOCR init failed: {e}")
-                return None
+        print("  → Initializing EasyOCR (first run downloads models ~80MB)...")
+        import easyocr
+        
+        # Initialize EasyOCR with English language support
+        # gpu=False: Use CPU (works on all systems)
+        # verbose=False: Suppress detailed logs
+        # Models are cached in: C:\Users\<username>\.EasyOCR\
+        reader = easyocr.Reader(
+            ['en'], 
+            gpu=False, 
+            verbose=False,
+            download_enabled=True  # Allow model downloads
+        )
+        print("  ✓ EasyOCR initialized and cached for subsequent calls")
+        return reader
     except Exception as e:
-        print(f"  ⚠ OCR Reader initialization failed: {e}")
+        print(f"  ⚠ EasyOCR initialization failed: {e}")
+        print("  → Install with: pip install easyocr torch torchvision")
         return None
-    
-    return None
 
 def get_ocr_reader():
     """Wrapper to maintain backward compatibility"""

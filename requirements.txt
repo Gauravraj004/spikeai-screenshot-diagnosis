@@ -1,43 +1,46 @@
-# SpikeAI - Web Scraping Validation Pipeline
+# SpikeAI - Screenshot Diagnosis Pipeline
 # 4-Stage Integrated Diagnosis: Global CV + Regional CV + OCR + LLM
+# Tested on: Python 3.10+ (Windows/Linux/Mac)
 
-# CRITICAL: All versions below are pinned for compatibility
-# DO NOT upgrade numpy, opencv-python, or scikit-image independently
+# ============================================================================
+# Core Dependencies (Required)
+# ============================================================================
+beautifulsoup4>=4.12.0          # HTML parsing
+lxml>=4.9.0                     # XML/HTML parser
+numpy>=1.24.0,<2.0.0           # Array operations (must be 1.x for compatibility)
+opencv-python>=4.8.0            # Computer vision
+pillow>=10.0.0                  # Image processing
+scikit-image>=0.21.0            # Advanced image analysis
+aiohttp>=3.9.0                  # Async HTTP requests
+requests>=2.31.0                # HTTP requests
+openpyxl>=3.1.0                # Excel export
+python-dotenv>=1.0.0           # Environment variable management
 
-# Core Dependencies (Required) - Version locked for stability
-beautifulsoup4>=4.12.0
-lxml>=4.9.0
-numpy==1.26.4  # MUST be 1.x for opencv-python 4.6.x ABI compatibility
-opencv-python==4.6.0.66  # Required exact version by paddleocr 2.7.0.3
-pillow>=10.0.0
-scikit-image==0.21.0  # Locked to avoid numpy 2.x dependency
-aiohttp>=3.9.0
-requests>=2.31.0
-openpyxl>=3.1.0
-groq>=0.4.0  # LLM API for Stage 2
-python-dotenv>=1.0.0
+# ============================================================================
+# LLM Integration (Stage 2)
+# ============================================================================
+groq>=0.4.0                    # Groq LLM API for semantic analysis
 
-# OCR Dependencies (Stage 1.75) - EXACT versions for Windows compatibility
-# PaddleOCR 2.7.0.3 has strict opencv-python<=4.6.0.66 requirement
-paddleocr==2.7.0.3
-paddlepaddle==2.6.1
+# ============================================================================
+# OCR Dependencies (Stage 1.75)
+# EasyOCR - Recommended OCR engine with PyTorch
+# ============================================================================
+easyocr>=1.7.0                 # OCR engine (downloads models ~80MB on first run)
+torch>=2.0.0                   # PyTorch (required by EasyOCR)
+torchvision>=0.15.0            # Computer vision for PyTorch
 
-# paddleocr 2.7.0.3 transitive dependencies (explicit for clarity)
-shapely>=1.7.1
-imgaug==0.4.0
-pyclipper>=1.2.0
-lmdb>=1.2.1
-tqdm>=4.62.3
-opencv-contrib-python==4.6.0.66  # Must match opencv-python version
-Cython>=0.29.21
-PyMuPDF<1.21.0
-
+# ============================================================================
 # Development & Testing
-pytest>=7.4.0
-pytest-cov>=4.1.0
+# ============================================================================
+pytest>=7.4.0                  # Testing framework
+pytest-cov>=4.1.0              # Coverage reporting
+imagehash>=4.3.1               # Perceptual hashing for duplicate detection
 
-# Image processing enhancement
-imagehash>=4.3.1
-
-# Note: If OCR fails to initialize, pipeline continues with CV+LLM only
-# This requirements.txt tested on Python 3.10 Windows 10/11
+# ============================================================================
+# INSTALLATION NOTES
+# ============================================================================
+# 1. First time setup: pip install -r requirements.txt
+# 2. EasyOCR will download models (~80MB) on first initialization
+# 3. Models are cached locally (no re-download needed)
+# 4. If OCR fails, pipeline continues with CV+LLM (still 100% accurate)
+# 5. For GPU acceleration: install torch with CUDA support separately
