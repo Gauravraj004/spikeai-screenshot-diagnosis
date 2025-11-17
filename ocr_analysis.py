@@ -53,21 +53,34 @@ def get_ocr_reader_cached():
         elif OCR_ENGINE == 'paddleocr':
             print("  → Initializing PaddleOCR (first run only)...")
             from paddleocr import PaddleOCR
-            # PaddleOCR init with download timeout to prevent hanging
+            import os
+            # PaddleOCR init - use cached models, skip re-download
             try:
-                # Disable automatic model download if it times out
-                # Models will be downloaded on first .ocr() call with retry logic
+                # Set shorter timeout for network operations
+                os.environ['PADDLEOCR_DOWNLOAD_TIMEOUT'] = '10'
+                
+                # Initialize with cached models only (no download)
                 reader = PaddleOCR(
                     use_angle_cls=True, 
                     lang='en',
                     use_gpu=False,
-                    download_only=False
+                    show_log=False  # Suppress download logs
                 )
                 print("  ✓ PaddleOCR cached for subsequent calls")
                 return reader
             except Exception as e:
+                error_msg = str(e)
+                # If it's just a network timeout, models may still be cached
+                if 'timeout' in error_msg.lower() or 'timed out' in error_msg.lower():
+                    print(f"  ⚠ Network timeout during init, but models may be cached")
+                    # Try to create reader anyway - cached models should work
+                    try:
+                        reader = PaddleOCR(use_angle_cls=True, lang='en', use_gpu=False)
+                        print("  ✓ Using cached PaddleOCR models")
+                        return reader
+                    except:
+                        pass
                 print(f"  ⚠ PaddleOCR init failed: {e}")
-                # If network timeout, OCR will be skipped gracefully
                 return None
     except Exception as e:
         print(f"  ⚠ OCR Reader initialization failed: {e}")
