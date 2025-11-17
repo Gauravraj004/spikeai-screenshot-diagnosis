@@ -1,52 +1,29 @@
 # SpikeAI - Screenshot Diagnosis Pipeline
-# 4-Stage Integrated Diagnosis: Global CV + Regional CV + OCR + LLM
-# Tested on: Python 3.10+ (Windows/Linux/Mac)
+# Python 3.10+ required
 
-# ============================================================================
-# Core Dependencies (Required)
-# ============================================================================
-beautifulsoup4>=4.12.0          # HTML parsing
-lxml>=4.9.0                     # XML/HTML parser
-numpy>=1.24.0,<2.0.0           # Array operations (must be 1.x for compatibility)
-opencv-python>=4.8.0            # Computer vision
-pillow>=10.0.0                  # Image processing
-scikit-image>=0.21.0            # Advanced image analysis
-aiohttp>=3.9.0                  # Async HTTP requests
-requests>=2.31.0                # HTTP requests
-openpyxl>=3.1.0                # Excel export
-python-dotenv>=1.0.0           # Environment variable management
-
-# ============================================================================
-# LLM Integration (Stage 2)
-# ============================================================================
-groq>=0.4.0                    # Groq LLM API for semantic analysis
-
-# ============================================================================
-# OCR Dependencies (Stage 1.75) - OPTIONAL
-# EasyOCR with CPU-only PyTorch (NO GPU/CUDA required)
-# ============================================================================
-# IMPORTANT: Install PyTorch CPU version FIRST to avoid DLL errors:
-# pip install torch==2.0.1 torchvision==0.15.2 --index-url https://download.pytorch.org/whl/cpu
-# THEN install EasyOCR:
-# pip install easyocr
+# =============================================================================
+# INSTALLATION OPTIONS:
+# =============================================================================
+# Option 1 (Recommended - No OCR, CV+LLM only):
+#   pip install -r requirements_base.txt
 #
-# If you get "c10.dll" errors, it means GPU version of torch was installed
-# Solution: pip uninstall torch torchvision -y, then reinstall with --index-url above
-#
-# OCR is OPTIONAL - pipeline works 100% accurately without it using CV+LLM only
+# Option 2 (Full pipeline with OCR):
+#   pip install -r requirements_base.txt
+#   pip install -r requirements_ocr.txt
+# =============================================================================
 
-# ============================================================================
-# Development & Testing
-# ============================================================================
-pytest>=7.4.0                  # Testing framework
-pytest-cov>=4.1.0              # Coverage reporting
-imagehash>=4.3.1               # Perceptual hashing for duplicate detection
-
-# ============================================================================
-# INSTALLATION NOTES
-# ============================================================================
-# 1. First time setup: pip install -r requirements.txt
-# 2. EasyOCR will download models (~80MB) on first initialization
-# 3. Models are cached locally (no re-download needed)
-# 4. If OCR fails, pipeline continues with CV+LLM (still 100% accurate)
-# 5. For GPU acceleration: install torch with CUDA support separately
+# Core pipeline (CV + LLM) - Works 100% without OCR
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+numpy>=1.24.0,<2.0.0
+opencv-python>=4.8.0
+pillow>=10.0.0
+scikit-image>=0.21.0
+aiohttp>=3.9.0
+requests>=2.31.0
+openpyxl>=3.1.0
+python-dotenv>=1.0.0
+groq>=0.4.0
+pytest>=7.4.0
+pytest-cov>=4.1.0
+imagehash>=4.3.1
