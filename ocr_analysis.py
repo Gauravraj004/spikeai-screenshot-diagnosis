@@ -53,27 +53,14 @@ def get_ocr_reader_cached():
         elif OCR_ENGINE == 'paddleocr':
             print("  → Initializing PaddleOCR (first run only)...")
             from paddleocr import PaddleOCR
-            # PaddleOCR init signature changed between releases; try common variations
-            # PaddleOCR init signature changed between releases; try common variations
-            init_exceptions = []
+            # PaddleOCR init signature: use_angle_cls and lang only (show_log removed)
             try:
-                reader = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
-            except Exception as e1:
-                init_exceptions.append(str(e1))
-                try:
-                    reader = PaddleOCR(use_angle_cls=True, lang='en')
-                except Exception as e2:
-                    init_exceptions.append(str(e2))
-                    try:
-                        # Fall back to minimal constructor
-                        reader = PaddleOCR(lang='en')
-                    except Exception as e3:
-                        init_exceptions.append(str(e3))
-                        print(f"  ⚠ PaddleOCR init failed: {' | '.join(init_exceptions)}")
-                        return None
-
-            print("  ✓ PaddleOCR cached for subsequent calls")
-            return reader
+                reader = PaddleOCR(use_angle_cls=True, lang='en')
+                print("  ✓ PaddleOCR cached for subsequent calls")
+                return reader
+            except Exception as e:
+                print(f"  ⚠ PaddleOCR init failed: {e}")
+                return None
     except Exception as e:
         print(f"  ⚠ OCR Reader initialization failed: {e}")
         return None
@@ -202,7 +189,8 @@ def extract_visible_text(screenshot_path: str) -> Dict[str, Any]:
         
         elif OCR_ENGINE == 'paddleocr':
             # PaddleOCR returns list of [bbox, (text, confidence)]
-            results = reader.ocr(screenshot_path, cls=True)
+            # Use use_angle_cls parameter instead of cls (API changed)
+            results = reader.ocr(screenshot_path, use_angle_cls=True)
             
             if results and results[0]:
                 for line in results[0]:
