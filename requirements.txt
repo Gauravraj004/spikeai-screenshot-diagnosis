@@ -1,37 +1,36 @@
 # SpikeAI - Web Scraping Validation Pipeline
 # 4-Stage Integrated Diagnosis: Global CV + Regional CV + OCR + LLM
 
-# Core Dependencies (Required)
+# CRITICAL: All versions below are pinned for compatibility
+# DO NOT upgrade numpy, opencv-python, or scikit-image independently
+
+# Core Dependencies (Required) - Version locked for stability
 beautifulsoup4>=4.12.0
 lxml>=4.9.0
-numpy>=1.24.0,<2.0.0  # numpy 2.x breaks opencv-python 4.6.x compatibility
-opencv-python<=4.6.0.66  # Required by paddleocr 2.7.0.3
+numpy==1.26.4  # MUST be 1.x for opencv-python 4.6.x ABI compatibility
+opencv-python==4.6.0.66  # Required exact version by paddleocr 2.7.0.3
 pillow>=10.0.0
-scikit-image>=0.21.0
+scikit-image==0.21.0  # Locked to avoid numpy 2.x dependency
 aiohttp>=3.9.0
 requests>=2.31.0
 openpyxl>=3.1.0
 groq>=0.4.0  # LLM API for Stage 2
 python-dotenv>=1.0.0
 
-# OCR Dependencies (Stage 1.75 - Optional but Recommended)
-# Note: Both EasyOCR and PaddleOCR require PyTorch
-# On Windows, may need Visual C++ Redistributables: https://aka.ms/vs/17/release/vc_redist.x64.exe
-
-# Option A: EasyOCR (better accuracy, slower)
-# easyocr>=1.7.1
-# torch>=2.1.0
-# torchvision>=0.16.0
-
-# Option B: PaddleOCR (faster, Windows-friendly)
-# Use specific compatible versions to avoid API signature mismatches
-# PaddleOCR 2.7.0.3 is stable and uses .ocr() method (not .predict())
+# OCR Dependencies (Stage 1.75) - EXACT versions for Windows compatibility
+# PaddleOCR 2.7.0.3 has strict opencv-python<=4.6.0.66 requirement
 paddleocr==2.7.0.3
 paddlepaddle==2.6.1
 
-# Note: If OCR fails to initialize (PyTorch DLL errors), pipeline will continue with CV+LLM only
-# Accuracy without OCR: 100% on current test cases (8/8)
-# Accuracy with OCR: Expected 100% with higher confidence on edge cases
+# paddleocr 2.7.0.3 transitive dependencies (explicit for clarity)
+shapely>=1.7.1
+imgaug==0.4.0
+pyclipper>=1.2.0
+lmdb>=1.2.1
+tqdm>=4.62.3
+opencv-contrib-python==4.6.0.66  # Must match opencv-python version
+Cython>=0.29.21
+PyMuPDF<1.21.0
 
 # Development & Testing
 pytest>=7.4.0
@@ -39,3 +38,6 @@ pytest-cov>=4.1.0
 
 # Image processing enhancement
 imagehash>=4.3.1
+
+# Note: If OCR fails to initialize, pipeline continues with CV+LLM only
+# This requirements.txt tested on Python 3.10 Windows 10/11
