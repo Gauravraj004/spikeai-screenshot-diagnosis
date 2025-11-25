@@ -20,11 +20,14 @@ import json
 import base64
 import time
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import requests
 from dotenv import load_dotenv
 import pandas as pd
 from bs4 import BeautifulSoup
+import re
+from PIL import Image
+import io
 
 load_dotenv()
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
@@ -33,6 +36,12 @@ SCREENSHOTS_DIR = Path("data/screenshots")
 HTML_DIR = Path("data/html")
 RESULTS_DIR = Path("diagnosis_results")
 RESULTS_DIR.mkdir(exist_ok=True)
+
+# Configuration: Split tall images for full detail analysis
+# Set to True to analyze full image detail (higher cost but more accurate)
+# Set to False to use OpenAI's automatic optimization (lower cost)
+SPLIT_TALL_IMAGES = False  # Change to True for full detail analysis
+MAX_HEIGHT_BEFORE_SPLIT = 4096  # Split images taller than this
 
 
 def analyze_html_structure(html_path: Path) -> Dict[str, Any]:
@@ -54,21 +63,26 @@ def analyze_html_structure(html_path: Path) -> Dict[str, Any]:
         
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        # Find all major content containers
-        main_sections = soup.find_all(['main', 'article', 'section'], 
-                                     class_=lambda x: x and any(term in str(x).lower() 
-                                     for term in ['content', 'main', 'article', 'section', 'container']))
+        # Find all major content containers (use word-boundary matching)
+        semantic_container_terms = ['content', 'main', 'article', 'section', 'container']
+        def _is_semantic_container(class_attr):
+            if not class_attr:
+                return False
+            txt = str(class_attr)
+            return any(re.search(r"\b" + re.escape(term) + r"\b", txt, re.I) for term in semantic_container_terms)
+
+        main_sections = soup.find_all(['main', 'article', 'section', 'div'], class_=_is_semantic_container)
         
         # Detect modals and overlays
         modals = soup.find_all(['div', 'section'], 
                               class_=lambda x: x and any(term in str(x).lower() 
                               for term in ['modal', 'overlay', 'popup', 'cookie', 'consent']))
         
-        # Extract text content from major sections to detect ACTUAL duplicates
+        # Extract full text content from all detected main sections (no truncation)
         section_texts = []
-        for section in main_sections[:10]:  # Check first 10 major sections
-            text = section.get_text(strip=True)[:500]  # First 500 chars
-            if len(text) > 100:  # Only meaningful sections
+        for section in main_sections:
+            text = section.get_text(strip=True)
+            if text and len(text) > 50:  # Filter out very small containers
                 section_texts.append(text)
         
         # Detect identical text sections (real duplication)
@@ -84,7 +98,7 @@ def analyze_html_structure(html_path: Path) -> Dict[str, Any]:
             else:
                 seen[text] = idx
         
-        # Find repeated class patterns (but be smarter about it)
+        # Find repeated class patterns (more precise matching)
         all_classes = []
         for tag in soup.find_all(class_=True):
             all_classes.extend(tag.get('class', []))
@@ -95,14 +109,19 @@ def analyze_html_structure(html_path: Path) -> Dict[str, Any]:
         
         # Only flag truly suspicious patterns (high count + semantic meaning)
         suspicious_duplication = []
+        semantic_terms = ['article', 'post', 'entry', 'card', 'tile', 'list', 'item']
+        # Blacklist common utility substrings to avoid false positives
+        blacklist_subs = ['btn', 'text-', 'align-', 'col-', 'container-fluid', 'row', 'nav', 'icon', 'fa-']
+        class_duplication_threshold = 10
         for cls, count in class_counts.items():
-            # Ignore common utility classes and normal list items
-            if count > 10 and any(term in cls.lower() for term in ['article', 'post', 'entry']):
-                suspicious_duplication.append({
-                    'class_name': cls,
-                    'occurrence_count': count,
-                    'note': 'High repetition - check if content is identical'
-                })
+            name = cls.lower()
+            if count >= class_duplication_threshold and any(re.search(r"\b" + re.escape(term) + r"\b", name) for term in semantic_terms):
+                if not any(sub in name for sub in blacklist_subs):
+                    suspicious_duplication.append({
+                        'class_name': cls,
+                        'occurrence_count': count,
+                        'note': 'High repetition - check if content is identical'
+                    })
         
         # Calculate DOM depth
         def get_max_depth(element, depth=0):
@@ -124,13 +143,13 @@ def analyze_html_structure(html_path: Path) -> Dict[str, Any]:
         
         # ==== NEW: ADVANCED CAPTURE ANALYSIS ====
         
-        # 1. Detect JavaScript-heavy SPAs (need wait time)
+        # 1. Detect JavaScript-heavy SPAs and frameworks (more signals)
         script_tags = soup.find_all('script')
         framework_indicators = {
-            'react': any('react' in str(script.get('src', '')).lower() for script in script_tags),
-            'vue': any('vue' in str(script.get('src', '')).lower() for script in script_tags),
-            'angular': any('angular' in str(script.get('src', '')).lower() for script in script_tags),
-            'next': any('next' in str(script.get('src', '')).lower() or '_next' in html_content for script in script_tags),
+            'react': any('react' in str(script.get('src', '')).lower() for script in script_tags) or bool(soup.find(attrs={'data-reactroot': True})) or ('react' in html_content.lower()),
+            'vue': any('vue' in str(script.get('src', '')).lower() for script in script_tags) or bool(soup.find(attrs=lambda k, v: k and 'vue' in k.lower())),
+            'angular': any('angular' in str(script.get('src', '')).lower() for script in script_tags) or 'ng-app' in html_content or 'angular' in html_content.lower(),
+            'next': ('_next' in html_content) or bool(soup.find(id='__next')) or bool(re.search(r"window\.__NEXT_DATA__", html_content)),
         }
         is_spa = any(framework_indicators.values())
         
@@ -208,9 +227,100 @@ def diagnose_screenshot(screenshot_path: Path, case_name: str) -> Dict[str, Any]
     
     start_time = time.time()
     
-    # Load high-quality screenshot
-    with open(screenshot_path, 'rb') as f:
-        base64_image = base64.b64encode(f.read()).decode('utf-8')
+    # Check image dimensions and warn about tall images
+    try:
+        import struct
+        import imghdr
+        
+        with open(screenshot_path, 'rb') as fhandle:
+            head = fhandle.read(24)
+            if len(head) >= 24:
+                # PNG signature check
+                if imghdr.what(screenshot_path) == 'png':
+                    check = struct.unpack('>i', head[4:8])[0]
+                    if check == 0x0d0a1a0a:  # PNG signature
+                        img_width, img_height = struct.unpack('>ii', head[16:24])
+                        
+                        if img_height > MAX_HEIGHT_BEFORE_SPLIT and not SPLIT_TALL_IMAGES:
+                            print(f"[!] WARNING: Very tall image ({img_width}×{img_height} px)")
+                            print(f"    OpenAI resizes images >~4096px - VLM may not see bottom details")
+                            print(f"    For full detail analysis, set SPLIT_TALL_IMAGES=True (higher cost)")
+                        elif img_height > MAX_HEIGHT_BEFORE_SPLIT and SPLIT_TALL_IMAGES:
+                            print(f"[*] Tall image detected ({img_width}×{img_height} px)")
+                            print(f"    SPLIT_TALL_IMAGES=True: Will analyze in full detail chunks")
+    except:
+        pass  # Skip dimension check if it fails
+    
+    # Load and process screenshot (with optional splitting for tall images)
+    image_content_parts = []
+    
+    if SPLIT_TALL_IMAGES:
+        # Split tall images into chunks for full detail analysis
+        try:
+            img = Image.open(screenshot_path)
+            img_width, img_height = img.size
+            
+            if img_height > MAX_HEIGHT_BEFORE_SPLIT:
+                print(f"[*] Splitting tall image into chunks for full detail analysis...")
+                
+                # Calculate number of chunks needed
+                chunk_height = MAX_HEIGHT_BEFORE_SPLIT
+                num_chunks = (img_height + chunk_height - 1) // chunk_height  # Ceiling division
+                
+                for i in range(num_chunks):
+                    top = i * chunk_height
+                    bottom = min((i + 1) * chunk_height, img_height)
+                    
+                    # Crop chunk
+                    chunk = img.crop((0, top, img_width, bottom))
+                    
+                    # Convert to base64
+                    buffer = io.BytesIO()
+                    chunk.save(buffer, format='PNG')
+                    chunk_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+                    
+                    image_content_parts.append({
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': f'data:image/png;base64,{chunk_base64}',
+                            'detail': 'high'
+                        }
+                    })
+                    
+                print(f"    Split into {num_chunks} chunks ({chunk_height}px each)")
+            else:
+                # Image not tall, use as-is
+                with open(screenshot_path, 'rb') as f:
+                    base64_image = base64.b64encode(f.read()).decode('utf-8')
+                    image_content_parts.append({
+                        'type': 'image_url',
+                        'image_url': {
+                            'url': f'data:image/png;base64,{base64_image}',
+                            'detail': 'high'
+                        }
+                    })
+        except Exception as e:
+            print(f"[!] Image splitting failed: {e}, using full image...")
+            with open(screenshot_path, 'rb') as f:
+                base64_image = base64.b64encode(f.read()).decode('utf-8')
+                image_content_parts.append({
+                    'type': 'image_url',
+                    'image_url': {
+                        'url': f'data:image/png;base64,{base64_image}',
+                        'detail': 'high'
+                    }
+                })
+    else:
+        # No splitting - use full image (OpenAI will auto-resize)
+        with open(screenshot_path, 'rb') as f:
+            base64_image = base64.b64encode(f.read()).decode('utf-8')
+            image_content_parts.append({
+                'type': 'image_url',
+                'image_url': {
+                    'url': f'data:image/png;base64,{base64_image}',
+                    'detail': 'high'
+                }
+            })
     
     # Analyze HTML structure if available (handle _correct suffix)
     # Try exact match first, then without _correct suffix
@@ -234,9 +344,14 @@ def diagnose_screenshot(screenshot_path: Path, case_name: str) -> Dict[str, Any]
     if html_analysis.get('has_footer_cta'):
         marketing_context = "\n**IMPORTANT**: HTML indicates this is a marketing page with a footer CTA. Having the same subscription form at the top AND bottom of the page is a STANDARD MARKETING PATTERN, not a bug."
     
+    # Add note about image chunks if splitting is enabled
+    image_note = ""
+    if SPLIT_TALL_IMAGES and len(image_content_parts) > 1:
+        image_note = f"\n**NOTE**: This tall page has been split into {len(image_content_parts)} sequential image chunks for full detail analysis. Analyze all chunks together as one continuous page."
+    
     prompt = f"""You are an expert web rendering diagnostician analyzing a screenshot of a web page.
 
-Your task: Determine if this page renders correctly or has rendering issues.
+Your task: Determine if this page renders correctly or has rendering issues.{image_note}
 
 **HTML STRUCTURE VALIDATION:**{html_validation_note}
 
@@ -367,15 +482,8 @@ Provide thorough, detailed analysis."""
                     'messages': [{
                         'role': 'user',
                         'content': [
-                            {'type': 'text', 'text': prompt},
-                            {
-                                'type': 'image_url',
-                                'image_url': {
-                                    'url': f'data:image/png;base64,{base64_image}',
-                                    'detail': 'high'
-                                }
-                            }
-                        ]
+                            {'type': 'text', 'text': prompt}
+                        ] + image_content_parts  # Add all image chunks
                     }],
                     # NO max_tokens limit - allow unlimited analysis
                     'temperature': 0.1
@@ -431,6 +539,22 @@ Provide thorough, detailed analysis."""
         tokens_in = usage.get('prompt_tokens', 0)
         tokens_out = usage.get('completion_tokens', 0)
         total_tokens = tokens_in + tokens_out
+        
+        # Calculate image tokens separately
+        # Image tokens are included in prompt_tokens but we can estimate:
+        # For 'detail: high', approximate formula:
+        # Base: 85 tokens + (170 * number_of_tiles)
+        # We'll extract from usage if available, otherwise estimate
+        prompt_tokens_details = usage.get('prompt_tokens_details', {})
+        image_tokens = prompt_tokens_details.get('cached_tokens', 0) if 'cached_tokens' in prompt_tokens_details else 0
+        
+        # If not available in details, estimate based on typical high-detail image
+        # Note: This is an approximation - exact count comes from OpenAI's tokenizer
+        if image_tokens == 0:
+            # Rough estimate: 85% of input tokens are typically from image for large screenshots
+            image_tokens = int(tokens_in * 0.85)
+        
+        text_prompt_tokens = tokens_in - image_tokens
         
         # Cost calculation (GPT-4o pricing)
         cost = (tokens_in * 2.50 + tokens_out * 10.00) / 1_000_000
@@ -492,6 +616,8 @@ Provide thorough, detailed analysis."""
         
         print(f"\n[METRICS] Token Usage:")
         print(f"   Input Tokens: {tokens_in:,}")
+        print(f"     ├─ Image Tokens: ~{image_tokens:,}")
+        print(f"     └─ Text Prompt Tokens: ~{text_prompt_tokens:,}")
         print(f"   Output Tokens: {tokens_out:,}")
         print(f"   Total Tokens: {total_tokens:,}")
         print(f"   Cost: ${cost:.4f}")
@@ -518,7 +644,9 @@ Provide thorough, detailed analysis."""
             'html_structure_analysis': html_analysis,
             'capture_recommendations': result.get('capture_recommendations', {}),
             'metrics': {
-                'tokens_input': tokens_in,
+                'tokens_input_total': tokens_in,
+                'tokens_input_image': image_tokens,
+                'tokens_input_text': text_prompt_tokens,
                 'tokens_output': tokens_out,
                 'tokens_total': total_tokens,
                 'cost_usd': cost,
@@ -557,7 +685,9 @@ Technical Implementation: {recs.get('technical_implementation', 'N/A')}"""
             'html_element_count': html_analysis.get('total_elements', 0),
             'is_spa': html_analysis.get('capture_analysis', {}).get('is_spa', False),
             'frameworks_detected': ', '.join(html_analysis.get('capture_analysis', {}).get('frameworks_detected', [])) or 'None',
-            'tokens_in': tokens_in,
+            'tokens_in_total': tokens_in,
+            'tokens_in_image': image_tokens,
+            'tokens_in_text': text_prompt_tokens,
             'tokens_out': tokens_out,
             'total_tokens': total_tokens,
             'cost': cost,
@@ -645,20 +775,26 @@ def main():
             print(f"   {issue_type}: {count}")
     
     # Cost analysis
-    total_tokens_in = sum(r.get('tokens_in', 0) for r in results)
+    total_tokens_in = sum(r.get('tokens_in_total', 0) for r in results)
+    total_tokens_in_image = sum(r.get('tokens_in_image', 0) for r in results)
+    total_tokens_in_text = sum(r.get('tokens_in_text', 0) for r in results)
     total_tokens_out = sum(r.get('tokens_out', 0) for r in results)
     total_tokens = sum(r.get('total_tokens', 0) for r in results)
     total_cost = sum(r.get('cost', 0) for r in results)
     avg_tokens_in = total_tokens_in / len(results) if results else 0
+    avg_tokens_in_image = total_tokens_in_image / len(results) if results else 0
+    avg_tokens_in_text = total_tokens_in_text / len(results) if results else 0
     avg_tokens_out = total_tokens_out / len(results) if results else 0
     avg_cost = total_cost / len(results) if results else 0
     
     print(f"\n💰 Token Usage & Cost Analysis:")
     print(f"   Total Input Tokens: {total_tokens_in:,}")
+    print(f"     ├─ Image Tokens: ~{total_tokens_in_image:,} ({100*total_tokens_in_image/total_tokens_in:.1f}%)")
+    print(f"     └─ Text Tokens: ~{total_tokens_in_text:,} ({100*total_tokens_in_text/total_tokens_in:.1f}%)")
     print(f"   Total Output Tokens: {total_tokens_out:,}")
     print(f"   Total Tokens: {total_tokens:,}")
     print(f"   Total Cost: ${total_cost:.4f}")
-    print(f"   Average Input/Case: {avg_tokens_in:,.0f}")
+    print(f"   Average Input/Case: {avg_tokens_in:,.0f} ({avg_tokens_in_image:,.0f} image + {avg_tokens_in_text:,.0f} text)")
     print(f"   Average Output/Case: {avg_tokens_out:,.0f}")
     print(f"   Average Cost/Case: ${avg_cost:.4f}")
     
@@ -672,7 +808,9 @@ def main():
     print(f"\n📁 Results saved to:")
     print(f"   Summary CSV: {csv_path}")
     print(f"   Individual JSONs: {RESULTS_DIR}/*.json")
-    print(f"\n💡 Note: No token limits applied - each case gets unlimited analysis depth")
+    print(f"\n💡 Note: OpenAI automatically optimizes very tall images (>4k px)")
+    print(f"   This reduces cost but VLM may miss details at bottom of page")
+    print(f"   Set SPLIT_TALL_IMAGES=True in config for full analysis (9-10x cost)")
     print("="*80 + "\n")
 
 

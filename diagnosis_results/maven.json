@@ -1,0 +1,44 @@
+{
+  "case_name": "maven",
+  "timestamp": "2025-11-25 16:02:41",
+  "analysis": {
+    "status": "BROKEN",
+    "issue_type": "partial_load",
+    "severity": "critical",
+    "confidence": 0.95,
+    "confidence_reasoning": "The screenshot shows a header and some initial content, but the majority of the page is blank, indicating a partial load. The HTML element count is zero, suggesting a JavaScript-rendered SPA that failed to load fully.",
+    "visual_description": "The page displays a header with navigation links and a hero section with a title and a 'Book a demo' button. A cookie consent modal is visible, but the rest of the page is mostly blank, with large empty spaces.",
+    "diagnosis": "The page appears to be a JavaScript-rendered SPA that did not load completely, resulting in a partial page load with missing main content.",
+    "evidence": "Visible header and hero section, but the rest of the page is blank. The HTML analysis shows zero elements, indicating a likely JavaScript rendering failure.",
+    "html_correlation": "The HTML structure shows zero elements, which aligns with the visual evidence of a partially loaded page. This suggests the page relies heavily on JavaScript for rendering.",
+    "user_impact": "Users cannot access the main content of the page, leading to a poor user experience and inability to interact with the site as intended.",
+    "root_cause": "The likely cause is a JavaScript error or a premature capture of the page before the JavaScript finished rendering.",
+    "capture_improvement": "To prevent this issue, ensure the page is fully loaded by waiting for specific elements to appear before capturing."
+  },
+  "html_structure_analysis": {
+    "error": "HTML analysis failed: analyze_html_structure.<locals>.<lambda>() missing 1 required positional argument: 'v'",
+    "total_elements": 0
+  },
+  "capture_recommendations": {
+    "primary_issue": "Partial page load due to incomplete JavaScript rendering.",
+    "wait_strategy": "selector-based",
+    "wait_duration": "Wait until key content elements are visible, such as the main content section.",
+    "selectors_to_wait_for": [
+      "main",
+      ".content",
+      ".hero"
+    ],
+    "scroll_needed": false,
+    "modal_handling": "Ensure the cookie consent modal is dismissed if it blocks content.",
+    "technical_implementation": "await page.waitForSelector('.content');"
+  },
+  "metrics": {
+    "tokens_input_total": 2954,
+    "tokens_input_image": 1792,
+    "tokens_input_text": 1162,
+    "tokens_output": 454,
+    "tokens_total": 3408,
+    "cost_usd": 0.011925,
+    "processing_time_seconds": 15.64407229423523
+  }
+}
