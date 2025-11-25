@@ -32,3 +32,4 @@ results/debug/*.png
 # OS
 .DS_Store
 Thumbs.db
+.venv/
