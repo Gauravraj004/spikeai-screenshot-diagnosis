@@ -32,6 +32,7 @@ results/debug/*.png
 # OS
 .DS_Store
 Thumbs.db
+.venv/
 
 # Old/Unrelated Files - DO NOT TRACK
 TECHNICAL_DOCUMENTATION.md
