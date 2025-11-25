@@ -198,38 +198,25 @@ Real-time progress with:
    💾 Saved: diagnosis_results\mavenagi.json
 ```
 
-## Documentation & Guides
+## Documentation
 
-📚 **Complete Documentation Available:**
+📚 **Available Documentation:**
 
-- **[CAPTURE_IMPROVEMENT_GUIDE.md](CAPTURE_IMPROVEMENT_GUIDE.md)** - Comprehensive guide covering:
-  - 8 common capture issue patterns with examples
-  - Detailed fix instructions for each pattern
-  - Complete Puppeteer/Playwright code examples
-  - Best practice capture script template
+- **[WORKFLOW_EXPLANATION.md](WORKFLOW_EXPLANATION.md)** - Complete step-by-step system walkthrough
+  - Phase-by-phase execution details (Initialization → HTML Analysis → VLM Analysis → Output)
+  - Code locations and data flow
+  - Real-world examples with input/output
 
-- **[CAPTURE_ANALYSIS_SUMMARY.md](CAPTURE_ANALYSIS_SUMMARY.md)** - Real-world examples:
-  - Actual results from test screenshots
-  - HTML → Screenshot → Fix correlation
-  - Cost and performance metrics
-  - Common patterns table
+- **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** - Technical architecture (5 pages)
+  - System components and design
+  - Data structures and API integration
+  - Performance metrics and cost analysis
+  - Edge cases and limitations
 
-- **[WORKFLOW_EXPLANATION.md](WORKFLOW_EXPLANATION.md)** - Step-by-step system walkthrough:
-  - Complete workflow with code locations
-  - Phase-by-phase execution details
-  - Decision logic and algorithms
-
-- **[SYSTEM_ARCHITECTURE.md](SYSTEM_ARCHITECTURE.md)** - Technical deep dive:
-  - Architecture and design decisions
-  - API integration details
-  - Assumptions and limitations
-  - Clarifying questions answered
-
-- **[MERMAID_DIAGRAMS.md](MERMAID_DIAGRAMS.md)** - Visual process flows:
-  - Enhanced process flow with capture analysis
-  - Capture issue detection flow chart
-  - Data flow architecture
-  - Output structure diagrams
+- **[MERMAID_DIAGRAMS.md](MERMAID_DIAGRAMS.md)** - Visual diagrams
+  - Architecture flow diagram
+  - Data processing pipeline
+  - Component interactions
 
 ## Common Capture Issues Detected
 
