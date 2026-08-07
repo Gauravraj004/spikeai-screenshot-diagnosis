@@ -1,5 +1,5 @@
 <div align="center">
-<img src="assets/repo-banner.svg" alt="SpikeAI Screenshot Diagnosis" width="100%" />
+<img src="assets/banner.svg" alt="SpikeAI Screenshot Diagnosis" width="100%" />
 </div>
 
 # SpikeAI Screenshot Diagnosis
@@ -38,16 +38,7 @@ For each case the pipeline can produce:
 
 ## Architecture
 
-```text
-Screenshot -----------------------------┐
-                                       │
-HTML file → local structure analysis ──┼→ vision-model prompt
-                                       │
-                                       ↓
-                              structured diagnosis
-                                       ↓
-                          JSON / CSV / console output
-```
+<img src="assets/architecture.svg" alt="SpikeAI Screenshot Diagnosis architecture" width="100%" />
 
 Detailed documentation is available in:
 
