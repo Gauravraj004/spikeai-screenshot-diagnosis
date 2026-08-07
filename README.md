@@ -1,3 +1,7 @@
+<div align="center">
+<img src="assets/repo-banner.svg" alt="SpikeAI Screenshot Diagnosis" width="100%" />
+</div>
+
 # SpikeAI Screenshot Diagnosis
 
 AI-assisted screenshot analysis for diagnosing web-rendering failures and generating capture recommendations from **visual evidence plus HTML structure**.
@@ -128,15 +132,12 @@ Generated results are written under `diagnosis_results/`.
 ## Design choices
 
 ### Local analysis first
-
 HTML parsing is deterministic and inexpensive, so the system extracts useful structure before making a model request. This gives the vision model concrete context and makes recommendations more actionable.
 
 ### Structured output
-
 The pipeline favors machine-readable fields over free-form prose so results can be compared across many screenshots or exported for downstream analysis.
 
 ### Optional HTML context
-
 Screenshot-only diagnosis remains possible, but matched HTML generally provides stronger evidence for capture-timing and selector recommendations.
 
 ## Limitations
@@ -148,6 +149,8 @@ Screenshot-only diagnosis remains possible, but matched HTML generally provides 
 - This repository does not claim benchmark-level diagnostic accuracy without a labelled evaluation dataset.
 
 ## Security and privacy
+
+See [SECURITY.md](SECURITY.md).
 
 Screenshots and HTML can contain personal, confidential, or authenticated content. Before sending data to an external model provider:
 
@@ -164,7 +167,6 @@ Keep `.env` local and never commit API keys.
 - Add unit tests for deterministic HTML analysis
 - Add schema validation for model responses
 - Add retry/backoff and request timeouts
-- Add CI for linting and smoke tests
 - Separate model-provider integration behind a small adapter interface
 
 ## License
